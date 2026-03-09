@@ -3269,6 +3269,12 @@ CURLMcode curl_multi_setopt(CURLM *m, CURLMoption option, ...)
   case CURLMOPT_NOTIFYDATA:
     multi->ntfy.ntfy_cb_data = va_arg(param, void *);
     break;
+  case CURLMOPT_REUSEWAITFUNCTION:
+    multi->reuse_wait_cb = va_arg(param, curl_reuse_wait_callback);
+    break;
+  case CURLMOPT_REUSEWAITDATA:
+    multi->reuse_wait_userp = va_arg(param, void *);
+    break;
   default:
     mresult = CURLM_UNKNOWN_OPTION;
     break;
@@ -3997,6 +4003,27 @@ CURLMcode curl_multi_notify_disable(CURLM *m, unsigned int notification)
   if(!GOOD_MULTI_HANDLE(multi))
     return CURLM_BAD_HANDLE;
   return Curl_mntfy_disable(multi, notification);
+}
+
+bool curl_multi_reuse_wait(struct Curl_multi *multi,
+                           struct Curl_easy *data,
+                           long pending_conn,
+                           long busy_single_use_conn,
+                           long busy_multiplex_conn)
+{
+  long wait_for_reuse = 0;
+  if (!pending_conn && !busy_single_use_conn && !busy_multiplex_conn)
+    return FALSE;
+  if (!multi->reuse_wait_cb)
+    return FALSE;
+  set_in_callback(multi, TRUE);
+  wait_for_reuse = multi->reuse_wait_cb(data,
+    pending_conn,
+    busy_single_use_conn,
+    busy_multiplex_conn,
+    multi->reuse_wait_userp);
+  set_in_callback(multi, FALSE);
+  return wait_for_reuse == 1;
 }
 
 #ifdef DEBUGBUILD

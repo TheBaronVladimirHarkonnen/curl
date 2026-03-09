@@ -164,4 +164,10 @@ void Curl_multi_clear_dirty(struct Curl_easy *data);
 
 void Curl_multi_set_now(struct Curl_multi *multi);
 
+bool curl_multi_reuse_wait(struct Curl_multi *multi,
+                           struct Curl_easy *data,
+                           long pending_conn,
+                           long busy_single_use_conn,
+                           long busy_multiplex_conn);
+
 #endif /* HEADER_CURL_MULTIIF_H */

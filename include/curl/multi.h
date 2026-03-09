@@ -403,6 +403,12 @@ typedef enum {
   /* This is the argument passed to the notify callback */
   CURLOPT(CURLMOPT_NOTIFYDATA, CURLOPTTYPE_OBJECTPOINT, 19),
 
+  /* This is the `reuse wait` callback function pointer */
+  CURLOPT(CURLMOPT_REUSEWAITFUNCTION, CURLOPTTYPE_FUNCTIONPOINT, 20),
+
+  /* This is the argument passed to the `reuse wait` callback */
+  CURLOPT(CURLMOPT_REUSEWAITDATA, CURLOPTTYPE_OBJECTPOINT, 21),
+
   CURLMOPT_LASTENTRY /* the last unused */
 } CURLMoption;
 
@@ -542,6 +548,15 @@ CURL_EXTERN CURLMcode curl_multi_notify_disable(CURLM *multi,
 
 CURL_EXTERN CURLMcode curl_multi_notify_enable(CURLM *multi,
                                                unsigned int notification);
+
+/*
+ * Callback to install via CURLMOPT_REUSEWAITFUNCTION.
+ */
+typedef long (*curl_reuse_wait_callback)(CURL *easy_handle,
+                                     long pending_conn,
+                                     long busy_single_use_conn,
+                                     long busy_multiplex_conn,
+                                     void* userp);
 
 #ifdef __cplusplus
 } /* end of extern "C" */

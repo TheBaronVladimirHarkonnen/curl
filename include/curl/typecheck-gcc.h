@@ -214,6 +214,9 @@
       if((option) == CURLMOPT_PUSHFUNCTION)                             \
         if(!curlcheck_multipush_cb(value))                              \
           Wcurl_multi_setopt_err_pushcb();                              \
+      if((option) == CURLMOPT_REUSEWAITFUNCTION)                        \
+        if(!curlcheck_multireusewait_cb(value))                         \
+          Wcurl_multi_setopt_err_reusewaitcb();                         \
       if((option) == CURLMOPT_SOCKETFUNCTION)                           \
         if(!curlcheck_multisocket_cb(value))                            \
           Wcurl_multi_setopt_err_socketcb();                            \
@@ -231,6 +234,7 @@
    (option) == CURLMOPT_PUSHDATA ||                                     \
    (option) == CURLMOPT_SOCKETDATA ||                                   \
    (option) == CURLMOPT_TIMERDATA ||                                    \
+   (option) == CURLMOPT_REUSEWAITDATA ||                                \
    0)
 
 /* evaluates to true if the option takes a char ** argument */
@@ -259,6 +263,11 @@
   (curlcheck_NULL(expr) ||                                              \
    curlcheck_cb_compatible((expr), curl_notify_callback))
 
+/* evaluates to true if expr is of type curl_reuse_wait_callback */
+#define curlcheck_multireusewait_cb(expr)                               \
+  (curlcheck_NULL(expr) ||                                              \
+   curlcheck_cb_compatible((expr), curl_reuse_wait_callback))
+
 /*
  * Make sure that the functions are called with three arguments
  */
@@ -286,6 +295,8 @@ CURLWARNING(Wcurl_multi_setopt_err_pushcb,
             "curl_multi_setopt expects a curl_push_callback argument")
 CURLWARNING(Wcurl_multi_setopt_err_notifycb,
             "curl_multi_setopt expects a curl_notify_callback argument")
+CURLWARNING(Wcurl_multi_setopt_err_reusewaitcb,
+            "curl_multi_setopt expects a curl_reuse_wait_callback argument")
 CURLWARNING(Wcurl_multi_setopt_err_socketcb,
             "curl_multi_setopt expects a curl_socket_callback argument")
 CURLWARNING(Wcurl_multi_setopt_err_timercb,

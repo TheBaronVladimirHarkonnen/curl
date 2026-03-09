@@ -107,6 +107,10 @@ struct Curl_multi {
   curl_push_callback push_cb;
   void *push_userp;
 
+  /* `reuse wait` callback used for transfers on this multi */
+  curl_reuse_wait_callback reuse_wait_cb;
+  void *reuse_wait_userp;
+
   struct Curl_dnscache dnscache; /* DNS cache */
   struct Curl_ssl_scache *ssl_scache; /* TLS session pool */
 

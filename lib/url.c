@@ -559,6 +559,31 @@ void Curl_conn_free(struct Curl_easy *data, struct connectdata *conn)
 }
 
 /*
+ * xfer_may_wait_for_reuse()
+ *
+ * Return a TRUE, iff the transfer can queue and wait for a connection to become idle or multiplexable.
+ */
+static bool xfer_may_wait_for_reuse(const struct Curl_easy *data,
+                                    const struct connectdata *conn)
+{
+#ifndef CURL_DISABLE_HTTP
+  if(conn->scheme->protocol & PROTO_FAMILY_HTTP) {
+    bool nonpersistent_conn = data->state.http_neg.only_10 || data->state.http_neg.accept_09;
+    bool conn_is_closing = conn->bits.protoconnstart && conn->bits.close;
+    if (nonpersistent_conn || conn_is_closing)
+      return FALSE;
+
+    if (data->multi && data->multi->reuse_wait_cb)
+      return TRUE;
+  }
+#else
+  (void)data;
+  (void)conn;
+#endif
+  return FALSE;
+}
+
+/*
  * xfer_may_multiplex()
  *
  * Return a TRUE, iff the transfer can be done over an (appropriate)
@@ -740,7 +765,11 @@ struct url_conn_match {
   struct connectdata *found;
   struct Curl_easy *data;
   struct connectdata *needle;
+  int pending_conn;
+  int busy_single_use_conn;
+  int busy_multiplex_conn;
   BIT(may_multiplex);
+  BIT(may_wait_for_busy_conn);
   BIT(want_ntlm_http);
   BIT(want_proxy_ntlm_http);
   BIT(want_nego_http);
@@ -816,7 +845,7 @@ static bool url_match_fully_connected(struct connectdata *conn,
 {
   if(!Curl_conn_is_connected(conn, FIRSTSOCKET) ||
      conn->bits.upgrade_in_progress) {
-    /* Not yet connected, or a protocol upgrade is in progress. The later
+    /* Not yet connected, or a protocol upgrade is in progress. The latter
      * happens for HTTP/2 Upgrade: requests that need a response. */
     if(m->may_multiplex) {
       m->seen_pending_conn = TRUE;
@@ -824,6 +853,7 @@ static bool url_match_fully_connected(struct connectdata *conn,
       infof(m->data, "Connection #%" FMT_OFF_T
             " is not open enough, cannot reuse", conn->connection_id);
     }
+    ++m->pending_conn;
     /* Do not pick a connection that has not connected yet */
     return FALSE;
   }
@@ -848,7 +878,7 @@ static bool url_match_multiplex_needs(struct connectdata *conn,
     if(!conn->bits.multiplex) {
       /* conn busy and conn cannot take more transfers */
       m->seen_single_use_conn = TRUE;
-      return FALSE;
+      return (bool)m->may_wait_for_busy_conn;
     }
     m->seen_multiplex_conn = TRUE;
     if(!m->may_multiplex || !url_match_multi(conn, m))
@@ -861,25 +891,34 @@ static bool url_match_multiplex_needs(struct connectdata *conn,
 static bool url_match_multiplex_limits(struct connectdata *conn,
                                        struct url_conn_match *m)
 {
-  if(CONN_INUSE(conn) && m->may_multiplex) {
-    DEBUGASSERT(conn->bits.multiplex);
+  if(!CONN_INUSE(conn))
+    return TRUE;
+
+  if(conn->bits.multiplex) {
+    DEBUGASSERT(m->may_multiplex);
     /* If multiplexed, make sure we do not go over concurrency limit */
     if(conn->attached_xfers >=
             Curl_multi_max_concurrent_streams(m->data->multi)) {
       infof(m->data, "client side MAX_CONCURRENT_STREAMS reached"
             ", skip (%u)", conn->attached_xfers);
+      ++m->busy_multiplex_conn;
       return FALSE;
     }
     if(conn->attached_xfers >=
        Curl_conn_get_max_concurrent(m->data, conn, FIRSTSOCKET)) {
       infof(m->data, "MAX_CONCURRENT_STREAMS reached, skip (%u)",
             conn->attached_xfers);
+      ++m->busy_multiplex_conn;
       return FALSE;
     }
-    /* When not multiplexed, we have a match here! */
+    /* we have a match here! */
     infof(m->data, "Multiplexed connection found");
+    return TRUE;
   }
-  return TRUE;
+  else {
+    ++m->busy_single_use_conn;
+    return FALSE;
+  }
 }
 
 static bool url_match_ssl_use(struct connectdata *conn,
@@ -949,13 +988,16 @@ static bool url_match_http_multiplex(struct connectdata *conn,
      (m->data->state.http_neg.allowed & (CURL_HTTP_V2x | CURL_HTTP_V3x)) &&
      (m->needle->scheme->protocol & CURLPROTO_HTTP) &&
      !conn->httpversion_seen) {
+    ++m->pending_conn;
     if(m->data->set.pipewait) {
       infof(m->data, "Server upgrade does not support multiplex yet, wait");
       m->found = NULL;
       m->wait_pipe = TRUE;
       return TRUE; /* stop searching, we want to wait */
     }
-    infof(m->data, "Server upgrade cannot be used");
+    if(!m->may_wait_for_busy_conn) {
+      infof(m->data, "Server upgrade cannot be used");
+    }
     return FALSE;
   }
   return TRUE;
@@ -1288,6 +1330,7 @@ static bool url_match_conn(struct connectdata *conn, void *userdata)
 static bool url_match_result(bool result, void *userdata)
 {
   struct url_conn_match *match = userdata;
+  bool wait_for_pending_multiplex_conn = FALSE;
   (void)result;
   if(match->found) {
     /* Attach it now while still under lock, so the connection does
@@ -1299,14 +1342,23 @@ static bool url_match_result(bool result, void *userdata)
     /* We have seen a single-use, existing connection to the destination and
      * no multiplexed one. It seems safe to assume that the server does
      * not support multiplexing. */
-    match->wait_pipe = FALSE;
+    wait_for_pending_multiplex_conn = FALSE;
   }
   else if(match->seen_pending_conn && match->data->set.pipewait) {
     infof(match->data,
           "Found pending candidate for reuse and CURLOPT_PIPEWAIT is set");
-    match->wait_pipe = TRUE;
+    wait_for_pending_multiplex_conn = TRUE;
   }
   match->force_reuse = FALSE;
+  match->wait_pipe = wait_for_pending_multiplex_conn;
+
+  if(!wait_for_pending_multiplex_conn && match->may_wait_for_busy_conn) {
+    match->wait_pipe = curl_multi_reuse_wait(match->data->multi,
+      match->data,
+      match->pending_conn,
+      match->busy_single_use_conn,
+      match->busy_multiplex_conn);
+  }
   return FALSE;
 }
 
@@ -1330,6 +1382,7 @@ static bool url_attach_existing(struct Curl_easy *data,
   memset(&match, 0, sizeof(match));
   match.data = data;
   match.needle = needle;
+  match.may_wait_for_busy_conn = xfer_may_wait_for_reuse(data, needle);
   match.may_multiplex = xfer_may_multiplex(data, needle);
 
 #ifdef USE_NTLM
